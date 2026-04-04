@@ -16,7 +16,9 @@ from DQN import DQN_run
 # Settings
 # ============================================================
 
-output_dir = "dqn_variant_results_mid_settings_full_rep"
+base_output_dir = "experiment_results_target_replay"
+experiment_name = "dqn_variant_results_mid_settings_full_rep"
+output_dir = os.path.join(base_output_dir, experiment_name)
 
 n_timesteps = 1_000_000
 max_episode_length = 500
