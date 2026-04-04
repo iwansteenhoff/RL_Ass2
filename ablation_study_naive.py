@@ -10,7 +10,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from naive import DQN_run
+from DQN import DQN_run
 
 # Settings
 
@@ -39,7 +39,10 @@ default_policy = "egreedy"
 default_epsilon = 0.1
 
 # output directory
-output_dir = "ablation_results_required_hparams"
+base_output_dir = "experiment_results_HPO"
+experiment_name = "ablation_results_required_hparams"
+output_dir = os.path.join(base_output_dir, experiment_name)
+
 os.makedirs(output_dir, exist_ok=True)
 
 
@@ -201,6 +204,9 @@ def run_or_resume_config(config):
             plot=False,
             eval_interval=eval_interval,
             n_eval_episodes=n_eval_episodes,
+            use_replay_buffer=False,
+            use_target_network=False,
+            target_update_freq=1000,
             seed=run_seed,
         )
 

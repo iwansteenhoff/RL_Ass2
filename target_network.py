@@ -14,7 +14,7 @@ import gymnasium as gym
 import time
 from gymnasium.vector import SyncVectorEnv
 import matplotlib.pyplot as plt
-from naive import QNetwork
+from DQN import QNetwork
 
 class DQN_Agent():
 
@@ -200,7 +200,7 @@ def test_TN():
     n_timesteps = 1000000
     max_episode_length = 500
     gamma = 0.99
-    learning_rate = 1e-3
+    learning_rate = 5e-4
 
     policy = 'egreedy'
     epsilon = 0.1

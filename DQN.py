@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 from collections import deque
 import random
 
+
 class QNetwork(nn.Module):
     def __init__(self, obs_dim, n_actions, hidden_dim=128):
         super().__init__()
@@ -31,13 +32,26 @@ class QNetwork(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-class DQN_Agent():
 
-    def __init__(self, obs_dim, n_actions, learning_rate, gamma, hidden_dim=128, device=None):
+class DQN_Agent:
+    def __init__(
+        self,
+        obs_dim,
+        n_actions,
+        learning_rate,
+        gamma,
+        hidden_dim=128,
+        use_target_network=False,
+        target_update_freq=1000,
+        device=None
+    ):
         self.obs_dim = obs_dim
         self.n_actions = n_actions
         self.learning_rate = learning_rate
         self.gamma = gamma
+        self.use_target_network = use_target_network
+        self.target_update_freq = target_update_freq
+        self.step_count = 0
 
         self.device = device if device is not None else (
             "cuda" if torch.cuda.is_available() else "cpu"
@@ -45,81 +59,78 @@ class DQN_Agent():
 
         self.q_net = QNetwork(obs_dim, n_actions, hidden_dim=hidden_dim).to(self.device)
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=learning_rate)
-        self.loss_fn = nn.MSELoss()
+        self.loss_fn = self.loss_fn = nn.MSELoss()
+
+        # Only create a target network if requested
+        if self.use_target_network:
+            self.target_network = QNetwork(obs_dim, n_actions, hidden_dim=hidden_dim).to(self.device)
+            self.target_network.load_state_dict(self.q_net.state_dict())
+            self.target_network.eval()
+        else:
+            self.target_network = None
 
     def _to_tensor(self, s):
-        # s = np.array(s, dtype=np.float32)
-        return torch.from_numpy(s).to(self.device)
+        return torch.from_numpy(np.asarray(s, dtype=np.float32)).to(self.device)
 
     def select_action(self, s, policy='egreedy', epsilon=None, temp=None):
         s_tensor = self._to_tensor(s)
 
+        single_state = False
         if s_tensor.ndim == 1:
             s_tensor = s_tensor.unsqueeze(0)
+            single_state = True
 
         with torch.no_grad():
-            q_values = self.q_net(s_tensor) # vectorized (shape N env, n actions)
+            q_values = self.q_net(s_tensor)
 
         greedy_actions = torch.argmax(q_values, dim=1).cpu().numpy()
+
         if policy == 'greedy':
-            return greedy_actions if len(greedy_actions) > 1 else greedy_actions[0]
+            return greedy_actions[0] if single_state else greedy_actions
+
         elif policy == 'egreedy':
             if epsilon is None:
                 raise KeyError("Provide an epsilon")
 
-            rand_actions = np.random.randint(0, self.n_actions, size=len(s))
-            mask = np.random.rand(len(s)) < epsilon
-
+            batch_size = s_tensor.shape[0]
+            rand_actions = np.random.randint(0, self.n_actions, size=batch_size)
+            mask = np.random.rand(batch_size) < epsilon
             a = np.where(mask, rand_actions, greedy_actions)
 
-            return a if len(greedy_actions) > 1 else a[0]
+            return a[0] if single_state else a
 
         elif policy == 'softmax':
             if temp is None:
                 raise KeyError("Provide a temperature")
 
             probs = torch.softmax(q_values / temp, dim=1)
-            a = torch.multinomial(probs, 1).squeeze(1)
+            a = torch.multinomial(probs, 1).squeeze(1).cpu().numpy()
 
-            return a.cpu().numpy() if len(a) > 1 else a.item()
+            return a[0] if single_state else a
 
         else:
             raise ValueError(f"Unknown policy: {policy}")
 
-
-    # def update(self, s, a, r, s_next, done):
-    #     s = self._to_tensor(s).unsqueeze(0)
-    #     s_next = self._to_tensor(s_next).unsqueeze(0)
-
-    #     q_value = self.q_net(s)[0, a]
-
-    #     with torch.no_grad():
-    #         next_q_value = torch.max(self.q_net(s_next), dim=1).values[0]
-    #         target = r if done else r + self.gamma * next_q_value.item()
-
-    #     target = torch.tensor(target, dtype=torch.float32, device=self.device)
-
-    #     loss = self.loss_fn(q_value, target)
-
-    #     self.optimizer.zero_grad()
-    #     loss.backward()
-    #     self.optimizer.step()
-
-    # batch update trial
     def update_batch(self, batch):
         states, actions, rewards, next_states, dones = zip(*batch)
 
-        states = torch.from_numpy(np.array(states)).float().to(self.device)
-        next_states = torch.from_numpy(np.array(next_states)).float().to(self.device)
+        states = torch.from_numpy(np.array(states, dtype=np.float32)).to(self.device)
+        next_states = torch.from_numpy(np.array(next_states, dtype=np.float32)).to(self.device)
         actions = torch.tensor(actions, dtype=torch.long, device=self.device)
         rewards = torch.tensor(rewards, dtype=torch.float32, device=self.device)
         dones = torch.tensor(dones, dtype=torch.float32, device=self.device)
 
-        q_values = self.q_net(states)  # (B, n_actions)
+        # Q(s,a) from online network
+        q_values = self.q_net(states)
         q_values = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
 
+        # Bootstrap target
         with torch.no_grad():
-            next_q_values = self.q_net(next_states).max(1).values
+            if self.use_target_network:
+                next_q_values = self.target_network(next_states).max(1).values
+            else:
+                next_q_values = self.q_net(next_states).max(1).values
+
             targets = rewards + self.gamma * next_q_values * (1 - dones)
 
         loss = self.loss_fn(q_values, targets)
@@ -128,56 +139,88 @@ class DQN_Agent():
         loss.backward()
         self.optimizer.step()
 
-    
+        # Update target network periodically
+        if self.use_target_network:
+            self.step_count += 1
+            if self.step_count % self.target_update_freq == 0:
+                self.target_network.load_state_dict(self.q_net.state_dict())
+
     def evaluate(self, eval_env, n_eval_episodes=30, max_episode_length=500):
         returns = []
-        for i in range(n_eval_episodes):
+        for _ in range(n_eval_episodes):
             s, _ = eval_env.reset()
             R_ep = 0
-            for t in range(max_episode_length):
+
+            for _ in range(max_episode_length):
                 a = self.select_action(s, 'greedy')
                 s_prime, r, terminated, truncated, _ = eval_env.step(a)
                 done = terminated or truncated
                 R_ep += r
+
                 if done:
                     break
+
                 s = s_prime
+
             returns.append(R_ep)
-        mean_return = np.mean(returns)
-        return mean_return
+
+        return np.mean(returns)
 
 
-def DQN_run(n_timesteps, max_episode_length, learning_rate, gamma,
-                policy='egreedy', epsilon=None, temp=None,
-                hidden_dim=128, env_steps_per_update=100, plot=False, eval_interval=500,
-                n_eval_episodes=10, use_replay_buffer=False, seed=None):
-    '''
-    Runs a single repetition of a Monte Carlo RL agent.
+def DQN_run(
+    n_timesteps,
+    max_episode_length,
+    learning_rate,
+    gamma,
+    policy='egreedy',
+    epsilon=None,
+    temp=None,
+    hidden_dim=128,
+    env_steps_per_update=100,
+    plot=False,
+    eval_interval=500,
+    n_eval_episodes=10,
+    use_replay_buffer=False,
+    min_replay_size=1000,
+    use_target_network=False,
+    target_update_freq=1000,
+    seed=None
+):
+    """
+    Runs a single repetition of a DQN agent.
     Returns:
         eval_returns: array of evaluation returns
         eval_timesteps: array of timesteps at which evaluation happened
-    '''
+    """
 
     replay_buffer = deque(maxlen=100000)
 
     if seed is not None:
         np.random.seed(seed)
         torch.manual_seed(seed)
+        random.seed(seed)
 
     def make_env():
         return gym.make("CartPole-v1")
-    
+
     env = gym.make("CartPole-v1", render_mode="human" if plot else None)
     eval_env = gym.make("CartPole-v1")
 
     num_envs = 20
-
     envs = SyncVectorEnv([make_env for _ in range(num_envs)])
 
-    obs_dim = env.observation_space.shape[0]   # CartPole observation is a 4D vector
-    n_actions = env.action_space.n             # CartPole has a discrete action space
+    obs_dim = env.observation_space.shape[0]
+    n_actions = env.action_space.n
 
-    pi = DQN_Agent(obs_dim, n_actions, learning_rate, gamma, hidden_dim=hidden_dim)
+    pi = DQN_Agent(
+        obs_dim,
+        n_actions,
+        learning_rate,
+        gamma,
+        hidden_dim=hidden_dim,
+        use_target_network=use_target_network,
+        target_update_freq=target_update_freq
+    )
 
     batch = []
     batch_size = env_steps_per_update
@@ -189,22 +232,22 @@ def DQN_run(n_timesteps, max_episode_length, learning_rate, gamma,
     s, _ = envs.reset(seed=seed)
 
     while timestep < n_timesteps:
-
         a = pi.select_action(s, policy=policy, epsilon=epsilon, temp=temp)
 
         s_next, r, terminated, truncated, _ = envs.step(a)
         done = terminated | truncated
 
         for i in range(num_envs):
-            if use_replay_buffer:
-                replay_buffer.append((s[i], a[i], r[i], s_next[i], done[i]))
-            else:
-                batch.append((s[i], a[i], r[i], s_next[i], done[i]))
-            
+            transition = (s[i], a[i], r[i], s_next[i], done[i])
 
-        if use_replay_buffer and len(replay_buffer) >= batch_size:
-            batch = random.sample(replay_buffer, batch_size)
-            pi.update_batch(batch)
+            if use_replay_buffer:
+                replay_buffer.append(transition)
+            else:
+                batch.append(transition)
+
+        if use_replay_buffer and len(replay_buffer) >= min_replay_size:
+            sampled_batch = random.sample(replay_buffer, batch_size)
+            pi.update_batch(sampled_batch)
 
         if not use_replay_buffer and len(batch) >= batch_size:
             pi.update_batch(batch[:batch_size])
@@ -223,13 +266,14 @@ def DQN_run(n_timesteps, max_episode_length, learning_rate, gamma,
             eval_returns.append(mean_return)
 
     envs.close()
+    env.close()
     eval_env.close()
-    
+
     return np.array(eval_returns), np.array(eval_timesteps)
 
 
 def test():
-    n_timesteps = 1000000
+    n_timesteps = 1_000_000
     max_episode_length = 500
     gamma = 0.99
     learning_rate = 1e-3
@@ -239,6 +283,8 @@ def test():
     temp = 1.0
 
     use_replay_buffer = True
+    use_target_network = True
+    target_update_freq = 1000
 
     plot = True
 
@@ -251,13 +297,18 @@ def test():
         epsilon=epsilon,
         temp=temp,
         plot=plot,
-        use_replay_buffer=use_replay_buffer
+        use_replay_buffer=use_replay_buffer,
+        min_replay_size=1000,
+        use_target_network=use_target_network,
+        target_update_freq=target_update_freq
     )
 
     print("Evaluation timesteps:", eval_timesteps)
     print("Evaluation returns:", eval_returns)
 
     plt.plot(eval_timesteps, eval_returns)
+    plt.xlabel("Timesteps")
+    plt.ylabel("Evaluation return")
     plt.show()
 
 
