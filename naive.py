@@ -14,6 +14,8 @@ import gymnasium as gym
 import time
 from gymnasium.vector import SyncVectorEnv
 import matplotlib.pyplot as plt
+from collections import deque
+import random
 
 class QNetwork(nn.Module):
     def __init__(self, obs_dim, n_actions, hidden_dim=128):
@@ -148,13 +150,15 @@ class DQN_Agent():
 def DQN_run(n_timesteps, max_episode_length, learning_rate, gamma,
                 policy='egreedy', epsilon=None, temp=None,
                 hidden_dim=128, env_steps_per_update=100, plot=False, eval_interval=500,
-                n_eval_episodes=10, seed=None):
+                n_eval_episodes=10, use_replay_buffer=False, seed=None):
     '''
     Runs a single repetition of a Monte Carlo RL agent.
     Returns:
         eval_returns: array of evaluation returns
         eval_timesteps: array of timesteps at which evaluation happened
     '''
+
+    replay_buffer = deque(maxlen=100000)
 
     if seed is not None:
         np.random.seed(seed)
@@ -192,9 +196,17 @@ def DQN_run(n_timesteps, max_episode_length, learning_rate, gamma,
         done = terminated | truncated
 
         for i in range(num_envs):
-            batch.append((s[i], a[i], r[i], s_next[i], done[i]))
+            if use_replay_buffer:
+                replay_buffer.append((s[i], a[i], r[i], s_next[i], done[i]))
+            else:
+                batch.append((s[i], a[i], r[i], s_next[i], done[i]))
+            
 
-        if len(batch) >= batch_size:
+        if use_replay_buffer and len(replay_buffer) >= batch_size:
+            batch = random.sample(replay_buffer, batch_size)
+            pi.update_batch(batch)
+
+        if not use_replay_buffer and len(batch) >= batch_size:
             pi.update_batch(batch[:batch_size])
             batch = batch[batch_size:]
 
@@ -226,7 +238,9 @@ def test():
     epsilon = 0.1
     temp = 1.0
 
-    plot = False
+    use_replay_buffer = True
+
+    plot = True
 
     eval_returns, eval_timesteps = DQN_run(
         n_timesteps=n_timesteps,
@@ -236,7 +250,8 @@ def test():
         policy=policy,
         epsilon=epsilon,
         temp=temp,
-        plot=plot
+        plot=plot,
+        use_replay_buffer=use_replay_buffer
     )
 
     print("Evaluation timesteps:", eval_timesteps)

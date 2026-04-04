@@ -114,9 +114,9 @@ class DQN_Agent():
         return mean_return
 
 
-def DQN_run(n_timesteps, max_episode_length, learning_rate, gamma,
+def DQL_run(n_timesteps, max_episode_length, learning_rate, gamma,
                 policy='egreedy', epsilon=None, temp=None,
-                plot=True, eval_interval=500):
+                plot=True, eval_interval=10000):
     '''
     Runs a single repetition of a Monte Carlo RL agent.
     Returns:
@@ -126,8 +126,6 @@ def DQN_run(n_timesteps, max_episode_length, learning_rate, gamma,
 
     env = gym.make("CartPole-v1", render_mode="human" if plot else None)
     eval_env = gym.make("CartPole-v1")
-
-    print(env.observation_space)
 
     obs_dim = env.observation_space.shape[0]   # CartPole observation is a 4D vector
     n_actions = env.action_space.n             # CartPole has a discrete action space
@@ -160,11 +158,13 @@ def DQN_run(n_timesteps, max_episode_length, learning_rate, gamma,
             if timestep % eval_interval == 0:
                 mean_return = pi.evaluate(
                     eval_env,
-                    n_eval_episodes=30,
+                    n_eval_episodes=10,
                     max_episode_length=max_episode_length
                 )
                 eval_timesteps.append(timestep)
                 eval_returns.append(mean_return)
+
+                print(timestep)
 
     env.close()
     eval_env.close()
@@ -184,7 +184,7 @@ def test():
 
     plot = True
 
-    eval_returns, eval_timesteps = DQN_run(
+    eval_returns, eval_timesteps = DQL_run(
         n_timesteps=n_timesteps,
         max_episode_length=max_episode_length,
         learning_rate=learning_rate,
